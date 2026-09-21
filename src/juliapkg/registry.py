@@ -1,5 +1,6 @@
 import os
 import tarfile
+from sys import version_info
 
 # we can switch to tomllib when we require python 3.11+
 import tomli
@@ -39,6 +40,12 @@ def _load_registry_index(reg):
     if regpath.endswith(".tar.gz"):
         with tarfile.open(regpath) as reg:
             regidx = tomli.load(reg.extractfile("Registry.toml"))
+    elif regpath.endswith(".tar.zst"):
+        if version_info >= (3, 14):
+            with tarfile.open(regpath) as reg:
+                regidx = tomli.load(reg.extractfile("Registry.toml"))
+        else:
+            raise DecompressionError(f"Cannot decompress .tar.zst registry {regpath} on Python < 3.14")
     elif os.path.isdir(regpath):
         with open(os.path.join(regpath, "Registry.toml"), "rb") as fp:
             regidx = tomli.load(fp)
@@ -50,13 +57,25 @@ def _load_registry_index(reg):
 
 def _find_uuid(pkgname):
     uuids = {}
-    for reg in _find_registries():
+    found_registries = _find_registries()
+    for reg in found_registries:
         regpath = reg["path"]
         if not os.path.exists(regpath):
             continue
-        regidx = _load_registry_index(reg)
+        try:
+            regidx = _load_registry_index(reg)
+        except DecompressionError as e:
+            if reg == found_registries[-1]:
+                # if this is the last registry, we cannot continue, so raise the error
+                raise e
+            continue
         for uuid, info in regidx["packages"].items():
             if info["name"] != pkgname:
                 continue
             uuids.setdefault(uuid, []).append(regpath)
     return uuids
+
+
+class DecompressionError(Exception):
+    """Exception raised when data decompression fails."""
+    pass
